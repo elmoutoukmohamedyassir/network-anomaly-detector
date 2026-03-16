@@ -1,49 +1,51 @@
 import joblib
 import pandas as pd
 import time
+import os
 from scapy.all import sniff
 from processor import TrafficProcessor
 
+def run_monitor():
+    # Load the pre-trained Isolation Forest model
+    model_file = 'anomaly_model.joblib'
+    if not os.path.exists(model_file):
+        print(f"Error: {model_file} not found. Please run train_model.py first.")
+        return
 
-try:
-    model = joblib.load('anomaly_model.joblib')
-    print(" ML Model Loaded successfully.")
-except:
-    print(" Error: Could not find 'anomaly_model.joblib'. Run train_model.py first!")
-    exit()
+    model = joblib.load(model_file)
+    processor = TrafficProcessor()
 
-proc = TrafficProcessor()
+    print("Network Anomaly Detector initialized.")
+    print("Monitoring live traffic in 5-second intervals...")
+    print(f"{'TIMESTAMP':<12} | {'PORT':<8} | {'PKTS/S':<10} | {'LENGTH':<10} | {'STATUS'}")
+    print("-" * 65)
 
-def monitor_callback(packet):
-    """Feeds every packet captured into our processor."""
-    proc.process_packet(packet)
-
-print("\n NETWORK GUARDIAN ACTIVE")
-print("Monitoring your interface in 5-second windows...")
-print("Press Ctrl+C to stop.\n")
-print(f"{'TIME':<10} | {'PORT':<6} | {'PKT/S':<8} | {'LENGTH':<10} | {'STATUS'}")
-print("-" * 60)
-
-try:
-    while True:
-        # Sniff for 5 seconds
-        sniff(prn=monitor_callback, timeout=5, store=0)
-        
-        # Get the numbers from our processor
-        features = proc.get_features() # [port, rate, length]
-        
-        if features:
-            # Prepare data for the model (must be a DataFrame with same columns)
-            df_features = pd.DataFrame([features], columns=['Destination Port', 'Flow Packets/s', 'Total Length of Fwd Packets'])
+    try:
+        while True:
+            # Capture packets for a 5-second duration
+            sniff(prn=processor.process_packet, timeout=5, store=0)
             
-            # Predict! (1 = Normal, -1 = Anomaly)
-            prediction = model.predict(df_features)
+            # Extract features for prediction
+            features = processor.get_features()
             
-            # Formatting the output
-            current_time = time.strftime("%H:%M:%S")
-            status = " SAFE" if prediction[0] == 1 else "  DANGER / ANOMALY"
+            # Prepare data for model inference
+            df_features = pd.DataFrame([features], columns=[
+                'Destination Port', 
+                'Flow Packets/s', 
+                'Total Length of Fwd Packets'
+            ])
             
-            print(f"{current_time:<10} | {int(features[0]):<6} | {features[1]:<8.2f} | {features[2]:<10.0f} | {status}")
+            # Inference: 1 for Normal, -1 for Anomaly
+            prediction = model.predict(df_features)[0]
+            
+            timestamp = time.strftime("%H:%M:%S")
+            status = "ANOMALY DETECTED" if prediction == -1 else "NORMAL"
+            
+            # Print formatted output
+            print(f"{timestamp:<12} | {int(features[0]):<8} | {features[1]:<10.2f} | {features[2]:<10.0f} | {status}")
 
-except KeyboardInterrupt:
-    print("\n\n[!] Stopping the monitor. Stay safe!")
+    except KeyboardInterrupt:
+        print("\nMonitoring stopped by user.")
+
+if __name__ == "__main__":
+    run_monitor()
